@@ -1,19 +1,17 @@
-use axum:: {
-    extract::{Path,State},
-    routing::{get,post},
-    Json,Router,
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::{get, post},
 };
 
 use chrono::Utc;
 use hyper::StatusCode;
-use serde::{Deserialize,Serialize};
+use serde::{Deserialize, Serialize};
 
-use std::{
-    collections::HashMap, net::SocketAddr, sync::Arc, time::Duration
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use tokio::{sync::{Mutex,mpsc}};
 use tokio::net::TcpListener;
+use tokio::sync::{Mutex, mpsc};
 
 use rand::Rng;
 
@@ -33,21 +31,21 @@ enum JobStatus {
     Compensated,
 }
 
-#[derive(Clone, Debug, Serialize,serde::Deserialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 struct JobInfo {
     job_id: String,
     status: JobStatus,
     attempts: u32,
     last_error: Option<String>,
-    started_at:Option<String>,
-    completed_at:Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
 }
 
 #[derive(Clone)]
 struct JobRequestInternal {
     job_id: String,
     req: JobRequest,
-    attempts:u32,
+    attempts: u32,
 }
 
 struct AppState {
@@ -61,10 +59,6 @@ struct JobResponse {
     #[serde(rename = "jobId")]
     job_id: String,
 }
-
-
-
-
 
 #[tokio::main]
 async fn main() {
@@ -86,16 +80,13 @@ async fn main() {
     tracing::info!(" Listening on http://{}", addr);
 
     let listener = TcpListener::bind("127.0.0.1:3000")
-            .await
-            .expect("Failed to bind to address");
+        .await
+        .expect("Failed to bind to address");
 
-    axum::serve(listener,app.into_make_service())
+    axum::serve(listener, app.into_make_service())
         .await
         .unwrap();
-
-
 }
-
 
 async fn worker_loop_single(job: JobRequestInternal, state: Arc<AppState>) {
     let mut job = job;
@@ -161,7 +152,6 @@ async fn worker_loop_single(job: JobRequestInternal, state: Arc<AppState>) {
     }
 }
 
-
 fn setup_state(num_workers: usize, queue_capacity: usize) -> Arc<AppState> {
     let (tx, rx) = mpsc::channel::<JobRequestInternal>(queue_capacity);
 
@@ -195,8 +185,6 @@ fn setup_state(num_workers: usize, queue_capacity: usize) -> Arc<AppState> {
     state
 }
 
-
-
 async fn submit_job(
     State(state): State<Arc<AppState>>,
     Json(req): Json<JobRequest>,
@@ -206,7 +194,9 @@ async fn submit_job(
         let idem = state.idempotency.lock().await;
         if let Some(existing) = idem.get(key) {
             println!("Returning existing job for idempotency key: {}", key);
-            return Ok(Json(JobResponse { job_id: existing.clone() }));
+            return Ok(Json(JobResponse {
+                job_id: existing.clone(),
+            }));
         }
     }
 
@@ -275,27 +265,30 @@ async fn get_job_status(
     }
 }
 
-
-
-
-
-
-
-
 /// Undo side effects if a job failed after max retries.
 /// Return Ok if compensation worked, Err if it failed.
 async fn compensate_job(job: &JobRequestInternal) -> Result<(), String> {
     match job.req.job_type.as_str() {
         "send_email" => {
-            println!("Compensating email: deleting draft for payload {}", job.req.payload);
+            println!(
+                "Compensating email: deleting draft for payload {}",
+                job.req.payload
+            );
             Ok(())
         }
         "generate_report" => {
-            println!(" Compensating report: cleaning up partial report {}", job.req.payload);
+            println!(
+                " Compensating report: cleaning up partial report {}",
+                job.req.payload
+            );
             Ok(())
         }
-        "send_email_fail" => { // need to impulate a fail
-            println!(" Compensating email forced fail: cleaning up partial report {}", job.req.payload);
+        "send_email_fail" => {
+            // need to impulate a fail
+            println!(
+                " Compensating email forced fail: cleaning up partial report {}",
+                job.req.payload
+            );
             Ok(())
         }
         other => Err(format!("No compensation available for {}", other)),
@@ -318,20 +311,18 @@ async fn execute_job(job: &JobRequestInternal) -> Result<(), String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
-        Router,
     };
-    use tower::ServiceExt; // for oneshot
-    use http_body_util::BodyExt; // for .collect()
     use bytes::Bytes;
+    use http_body_util::BodyExt; // for .collect()
     use serde_json::json;
-
+    use tower::ServiceExt; // for oneshot
 
     async fn body_bytes(resp: axum::response::Response) -> Bytes {
         resp.into_body().collect().await.unwrap().to_bytes()
@@ -340,62 +331,69 @@ mod tests {
     const NUM_WORKERS: usize = 2;
     const QUEUE_CAPACITY: usize = 5;
 
-  #[tokio::test]
-async fn test_retry_then_compensation() { // Satisfies compensation test
-    println!("Running test here");
-    let state = setup_state(NUM_WORKERS, QUEUE_CAPACITY);
-    let app = Router::new()
-        .route("/v1/jobs", axum::routing::post(submit_job))
-        .route("/v1/jobs/{id}", axum::routing::get(get_job_status))
-        .with_state(state.clone());
+    #[tokio::test]
+    async fn test_retry_then_compensation() {
+        // Satisfies compensation test
+        println!("Running test here");
+        let state = setup_state(NUM_WORKERS, QUEUE_CAPACITY);
+        let app = Router::new()
+            .route("/v1/jobs", axum::routing::post(submit_job))
+            .route("/v1/jobs/{id}", axum::routing::get(get_job_status))
+            .with_state(state.clone());
 
-    // Use the deterministic failing type
-    let req = JobRequest {
-        job_type: "send_email_fail".to_string(),
-        payload: serde_json::json!({"to":"user@example.com"}),
-        idempotency_key: None,
-    };
+        // Use the deterministic failing type
+        let req = JobRequest {
+            job_type: "send_email_fail".to_string(),
+            payload: serde_json::json!({"to":"user@example.com"}),
+            idempotency_key: None,
+        };
 
-    let response = app.clone().oneshot(
-        Request::builder()
-            .method("POST")
-            .uri("/v1/jobs")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&req).unwrap()))
-            .unwrap(),
-    ).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&req).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let job_id: String = serde_json::from_slice::<serde_json::Value>(&body)
-        .unwrap()["jobId"]
-        .as_str()
-        .unwrap()
-        .to_string();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let job_id: String = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["jobId"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
-    // Wait long enough for 3 attempts + backoffs (~< 2s worst case in our backoff)
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Wait long enough for 3 attempts + backoffs (~< 2s worst case in our backoff)
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let response = app.clone().oneshot(
-        Request::builder()
-            .method("GET")
-            .uri(format!("/v1/jobs/{}", job_id))
-            .body(Body::empty())
-            .unwrap(),
-    ).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let job: JobInfo = serde_json::from_slice(&body).unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let job: JobInfo = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(job.status, JobStatus::Compensated);
-    assert_eq!(job.attempts, 3);
-}
-
-   
+        assert_eq!(job.status, JobStatus::Compensated);
+        assert_eq!(job.attempts, 3);
+    }
 
     #[tokio::test]
-    async fn test_idempotency_key() { // test same idempotency key from two jobs.
+    async fn test_idempotency_key() {
+        // test same idempotency key from two jobs.
         let state = setup_state(NUM_WORKERS, QUEUE_CAPACITY);
         let app = Router::new()
             .route("/v1/jobs", axum::routing::post(submit_job))
@@ -421,8 +419,7 @@ async fn test_retry_then_compensation() { // Satisfies compensation test
             .await
             .unwrap();
         let body1 = body_bytes(res1).await;
-        let job_id1: String = serde_json::from_slice::<serde_json::Value>(&body1)
-            .unwrap()["jobId"]
+        let job_id1: String = serde_json::from_slice::<serde_json::Value>(&body1).unwrap()["jobId"]
             .as_str()
             .unwrap()
             .to_string();
@@ -441,8 +438,7 @@ async fn test_retry_then_compensation() { // Satisfies compensation test
             .await
             .unwrap();
         let body2 = body_bytes(res2).await;
-        let job_id2: String = serde_json::from_slice::<serde_json::Value>(&body2)
-            .unwrap()["jobId"]
+        let job_id2: String = serde_json::from_slice::<serde_json::Value>(&body2).unwrap()["jobId"]
             .as_str()
             .unwrap()
             .to_string();
@@ -450,10 +446,10 @@ async fn test_retry_then_compensation() { // Satisfies compensation test
         assert_eq!(job_id1, job_id2);
     }
 
-
     // Creates to many request and will fail with a 429
     #[tokio::test]
-    async fn test_backpressure_returns_429() { // test back pressure works
+    async fn test_backpressure_returns_429() {
+        // test back pressure works
         let state = setup_state(NUM_WORKERS, QUEUE_CAPACITY);
         let app = Router::new()
             .route("/v1/jobs", axum::routing::post(submit_job))
@@ -486,7 +482,7 @@ async fn test_retry_then_compensation() { // Satisfies compensation test
         }
 
         for x in statuses.clone() {
-            println!("{}",x.as_str());
+            println!("{}", x.as_str());
         }
 
         // Ensure at least one 429 returned
